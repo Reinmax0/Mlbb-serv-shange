@@ -528,4 +528,264 @@ public class MainActivity extends Activity {
         }
 
         String line = Math.round(avg) + " мс, джиттер " + Math.round(jitter)
-                + " мс, потери " + Math.ro
+                + " мс, потери " + Math.round(loss) + "%";
+        prefs.edit().putString(wifi ? "d_wifi" : "d_mob", line + " (" + t.name + ")").apply();
+        saveHist(wifi ? "Wi-Fi" : "моб.", t.name, Math.round(avg), Math.round(jitter), Math.round(loss));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(verdict).append(" · ").append(wifi ? "Wi-Fi" : "мобильная сеть").append("\n");
+        sb.append("Узел: ").append(t.name).append("\n");
+        sb.append("Пинг: мин ").append(Math.round(min)).append(" / сред ").append(Math.round(avg))
+                .append(" / макс ").append(Math.round(max)).append(" мс\n");
+        sb.append("Джиттер: ").append(Math.round(jitter)).append(" мс\n");
+        sb.append("Потери: ").append(Math.round(loss)).append("% (").append(r.length - ok)
+                .append(" из ").append(r.length).append(")\n\n");
+        sb.append(hint);
+        String w = prefs.getString("d_wifi", null), m = prefs.getString("d_mob", null);
+        if (w != null || m != null) {
+            sb.append("\n\nПоследние тесты:");
+            sb.append("\nWi-Fi: ").append(w != null ? w : "не тестировали");
+            sb.append("\nМобильная: ").append(m != null ? m : "не тестировали");
+        }
+        lastResult = sb.toString();
+        return lastResult;
+    }
+
+    void saveHist(String net, String node, long avg, long jit, long loss) {
+        String old = prefs.getString("hist", "");
+        String row = new SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(new Date())
+                + "\t" + net + "\t" + node + "\t" + avg + "\t" + jit + "\t" + loss;
+        String[] lines = old.isEmpty() ? new String[0] : old.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (int i = Math.max(0, lines.length - 14); i < lines.length; i++) sb.append(lines[i]).append('\n');
+        sb.append(row);
+        prefs.edit().putString("hist", sb.toString()).apply();
+    }
+
+    void renderHist() {
+        String s = prefs.getString("hist", "");
+        if (s.isEmpty()) {
+            histView.setText("Пока пусто. Запусти тест.");
+            return;
+        }
+        String[] lines = s.split("\n");
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (int i = lines.length - 1; i >= 0 && shown < 10; i--) {
+            String[] f = lines[i].split("\t");
+            if (f.length < 6) continue;
+            sb.append(f[0]).append(" · ").append(f[1]).append(" · ").append(f[2])
+                    .append("\n   ").append(f[3]).append(" мс, джиттер ").append(f[4])
+                    .append(", потери ").append(f[5]).append("%\n");
+            shown++;
+        }
+        histView.setText(sb.toString().trim());
+    }
+
+    void shareResult() {
+        if (lastResult.isEmpty()) {
+            Toast.makeText(this, "Сначала запусти тест", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_SEND);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_TEXT, "Тест сети для MLBB\n\n" + lastResult);
+        startActivity(Intent.createChooser(i, "Поделиться"));
+    }
+
+    void openSettings(String action) {
+        try {
+            startActivity(new Intent(action));
+        } catch (Exception e) {
+            Toast.makeText(this, "Эти настройки не открываются на этом телефоне", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    Button smallBtn(String label, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setAllCaps(false);
+        b.setText(label);
+        b.setTextSize(13);
+        b.setTextColor(ACCENT);
+        b.setBackground(rounded(BG, LINE, 1));
+        b.setOnClickListener(l);
+        return b;
+    }
+
+    // ---------- UI ----------
+
+    void render() {
+        List<Node> sorted = new ArrayList<>(nodes);
+        Collections.sort(sorted, new Comparator<Node>() {
+            @Override
+            public int compare(Node a, Node b) {
+                return rank(a) - rank(b);
+            }
+
+            int rank(Node n) {
+                if (n.ping >= 0) return n.ping;
+                return n.ping == -2 ? 100000 : 200000;
+            }
+        });
+
+        Node best = (!sorted.isEmpty() && sorted.get(0).ping >= 0) ? sorted.get(0) : null;
+        bestLine.setText(best == null ? "Замеряю…"
+                : "Лучший: " + best.name + " · " + best.ping + " мс");
+
+        cards.removeAllViews();
+        for (int k = 0; k < sorted.size(); k++) {
+            final Node n = sorted.get(k);
+            boolean sel = n.host.equals(selHost);
+            int col = n.ping < 0 ? MUTED : n.ping < 100 ? GOOD : n.ping < 160 ? WARN : BAD;
+            String val = n.ping == -2 ? "замер…" : n.ping == -1 ? "нет ответа" : n.ping + " мс";
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(16), dp(12), dp(16), dp(12));
+            card.setBackground(rounded(SURFACE, sel ? ACCENT : LINE, sel ? 2 : 1));
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    selHost = n.host;
+                    prefs.edit().putString("sel", selHost).apply();
+                    render();
+                }
+            });
+            card.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    deleteDialog(n);
+                    return true;
+                }
+            });
+
+            boolean star = best != null && n == best;
+            card.addView(text((star ? "★ " : "") + n.name, 17, FG, true));
+            card.addView(text(n.hub + " · " + n.host, 12, MUTED, false));
+            TextView p = text(val, 20, col, true);
+            p.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            p.setPadding(0, dp(4), 0, 0);
+            card.addView(p);
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = dp(10);
+            cards.addView(card, lp);
+        }
+    }
+
+    void addDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        final EditText name = new EditText(this);
+        name.setHint("Название, например Астана");
+        final EditText host = new EditText(this);
+        host.setHint("1.2.3.4  или  1.2.3.4:5555  или  ping:1.2.3.4");
+        host.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        box.addView(name);
+        box.addView(host);
+        new AlertDialog.Builder(this)
+                .setTitle("Новый узел")
+                .setView(box)
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Добавить", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        String h = host.getText().toString().trim();
+                        String nm = name.getText().toString().trim();
+                        if (h.isEmpty()) return;
+                        Node n = new Node();
+                        n.name = nm.isEmpty() ? h : nm;
+                        n.hub = "свой узел";
+                        n.host = h;
+                        nodes.add(n);
+                        saveNodes();
+                        render();
+                    }
+                }).show();
+    }
+
+    void deleteDialog(final Node n) {
+        new AlertDialog.Builder(this)
+                .setTitle("Удалить «" + n.name + "»?")
+                .setNegativeButton("Нет", null)
+                .setPositiveButton("Удалить", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        nodes.remove(n);
+                        saveNodes();
+                        render();
+                    }
+                }).show();
+    }
+
+    // ---------- хранение ----------
+
+    void loadNodes() {
+        nodes.clear();
+        String s = prefs.getString("nodes2", null);
+        if (s == null || s.trim().isEmpty()) s = DEFAULTS;
+        for (String line : s.split("\n")) {
+            String[] f = line.split("\t");
+            if (f.length < 3) continue;
+            Node n = new Node();
+            n.name = f[0];
+            n.hub = f[1];
+            n.host = f[2];
+            nodes.add(n);
+        }
+    }
+
+    void saveNodes() {
+        StringBuilder sb = new StringBuilder();
+        for (Node n : nodes) {
+            sb.append(n.name).append('\t').append(n.hub).append('\t').append(n.host).append('\n');
+        }
+        prefs.edit().putString("nodes2", sb.toString()).apply();
+    }
+
+    // ---------- запуск игры ----------
+
+    void launchGame() {
+        Intent i = getPackageManager().getLaunchIntentForPackage(MLBB_PACKAGE);
+        if (i != null) {
+            startActivity(i);
+            return;
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + MLBB_PACKAGE)));
+        } catch (ActivityNotFoundException e) {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://play.google.com/store/apps/details?id=" + MLBB_PACKAGE)));
+            } catch (ActivityNotFoundException e2) {
+                Toast.makeText(this, "MLBB не найдена на этом устройстве", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    // ---------- хелперы ----------
+
+    TextView text(String s, int sp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setGravity(Gravity.START);
+        return t;
+    }
+
+    GradientDrawable rounded(int fill, int stroke, int strokeDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(fill);
+        d.setCornerRadius(dp(10));
+        d.setStroke(dp(Math.max(strokeDp, 0)), stroke);
+        return d;
+    }
+
+    int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+}
