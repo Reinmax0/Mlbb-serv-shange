@@ -22,6 +22,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -31,16 +33,22 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
 
     static final String MLBB_PACKAGE = "com.mobile.legends";
 
     static final String DEFAULTS =
-            "Юго-Восточная Азия\tузел ~ Сингапур\tec2.ap-southeast-1.amazonaws.com\n"
-                    + "Индонезия\tузел ~ Джакарта\tec2.ap-southeast-3.amazonaws.com\n"
-                    + "Европа\tузел ~ Франкфурт\tec2.eu-central-1.amazonaws.com\n"
-                    + "Россия / СНГ\tузел ~ Москва\tstorage.yandexcloud.net";
+            "MLBB бой (матч)\tTCP · адрес из захвата трафика, может меняться\t43.109.87.164:5555\n"
+                    + "MLBB лобби\tTCP · адрес из захвата трафика\t161.202.222.219:30102\n"
+                    + "MLBB логин\tTCP · адрес из захвата трафика\t161.202.213.74:30071\n"
+                    + "Казахстан · Алматы\tICMP · отвечает на порт игры, Казахтелеком\tping:95.56.249.147\n"
+                    + "Казахстан · Павлодар\tICMP · отвечает на порт игры, Казахтелеком\tping:2.135.147.240\n"
+                    + "Юго-Восточная Азия\tориентир · облако, Сингапур\tec2.ap-southeast-1.amazonaws.com\n"
+                    + "Европа\tориентир · облако, Франкфурт\tec2.eu-central-1.amazonaws.com\n"
+                    + "Россия / СНГ\tориентир · облако, Москва\tstorage.yandexcloud.net";
 
     static final int BG = Color.parseColor("#0D1122");
     static final int SURFACE = Color.parseColor("#151B34");
@@ -135,10 +143,11 @@ public class MainActivity extends Activity {
         root.addView(launch, lp);
 
         TextView note = text(
-                "Замер идёт от твоего телефона до узла (TCP, порт 443 или свой). "
-                        + "Moonton не публикует адреса серверов игры, поэтому стандартные узлы "
-                        + "это облачные точки регионов, а не сами серверы MLBB. "
-                        + "Если знаешь адрес настоящего сервера, добавь его кнопкой выше. "
+                "Замер идёт от твоего телефона. Адрес можно задать так: 1.2.3.4 (TCP, порт 443), "
+                        + "1.2.3.4:5555 (TCP, свой порт) или ping:1.2.3.4 (ICMP). "
+                        + "Узлы с пометкой «ориентир» это облачные точки регионов, а не серверы игры. "
+                        + "Адреса боя, лобби и логина взяты из захвата трафика игры: боевой сервер "
+                        + "подбирает матчмейкинг, поэтому его адрес может меняться. "
                         + "Долгое нажатие на карточку удаляет узел. "
                         + "В MLBB сервер привязан к аккаунту, приложение его не переключает. "
                         + "Реальный пинг смотри в матче, в левом верхнем углу.",
@@ -217,8 +226,38 @@ public class MainActivity extends Activity {
         }, 4000);
     }
 
-    // Лучшее из 4 TCP-подключений, мс; -1 если узел не ответил. Адрес: host или host:port.
-    static int measure(String hostSpec) {
+    // Адрес: "host", "host:port" (TCP) или "ping:host" (ICMP). Результат в мс, -1 если нет ответа.
+    static int measure(String spec) {
+        if (spec.startsWith("ping:")) return pingIcmp(spec.substring(5));
+        return tcpConnect(spec);
+    }
+
+    static int pingIcmp(String host) {
+        Process p = null;
+        try {
+            p = new ProcessBuilder("ping", "-c", "3", "-W", "2", host)
+                    .redirectErrorStream(true).start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            Pattern pat = Pattern.compile("time[=<]([0-9.]+)\\s*ms");
+            double best = -1;
+            String line;
+            while ((line = r.readLine()) != null) {
+                Matcher m = pat.matcher(line);
+                if (m.find()) {
+                    double v = Double.parseDouble(m.group(1));
+                    if (best < 0 || v < best) best = v;
+                }
+            }
+            return best < 0 ? -1 : (int) Math.round(best);
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            if (p != null) p.destroy();
+        }
+    }
+
+    // Лучшее из 4 TCP-подключений, мс.
+    static int tcpConnect(String hostSpec) {
         try {
             String host = hostSpec;
             int port = 443;
@@ -355,12 +394,12 @@ public class MainActivity extends Activity {
         box.setPadding(dp(20), dp(8), dp(20), 0);
 
         final EditText name = new EditText(this);
-        name.setHint("Название, например Алматы");
+        name.setHint("Название, например Астана");
         name.setSingleLine(true);
         box.addView(name);
 
         final EditText host = new EditText(this);
-        host.setHint("Адрес или IP, например 1.2.3.4:443");
+        host.setHint("1.2.3.4, 1.2.3.4:5555 или ping:1.2.3.4");
         host.setSingleLine(true);
         host.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         box.addView(host);
@@ -428,4 +467,4 @@ public class MainActivity extends Activity {
     int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
-    }
+}
